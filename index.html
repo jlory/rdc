@@ -4,7 +4,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Le Téléjournal</title>
-<script src="https://cdn.jsdelivr.net/npm/hls.js@1"></script>
+<script src="https://cdn.jsdelivr.net/npm/hls.js@1.7.3/dist/hls.min.js" defer crossorigin="anonymous"
+        integrity="sha384-cciJ0zi8d1uMKC2zJd7jvPY4HQt7W4ByUI/FlMkltvBi31aW61rcpVBhpmW8/NwX"></script>
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -13,10 +14,12 @@
   <span id="status">Chargement…</span>
 </header>
 
-<div class="cal" id="head"></div>
-<div class="body"><div class="cal" id="grid"></div></div>
+<div class="body">
+  <div class="cal" id="head"></div>
+  <div class="cal" id="grid"></div>
+</div>
 
-<dialog id="player">
+<dialog id="player" aria-labelledby="ptitle">
   <div class="bar"><span id="ptitle"></span>
     <span><a id="plink" target="_blank" rel="noopener">Voir sur Radio-Canada</a> &nbsp; <button id="pclose">Fermer ✕</button></span>
   </div>
