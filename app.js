@@ -119,44 +119,87 @@ function render() {
   document.querySelector(".body").scrollTop = (11 - FIRST_HOUR) * hourPx;
 }
 
-let hls, loadId = 0;
+// The master manifest lists the audio as a separate track; playing that track's
+// own playlist downloads no video at all.
+async function getAudioUrl(master) {
+  const res = await fetch(master);
+  if (!res.ok) throw new Error(`HTTP ${res.status} : manifeste`);
+  const line = (await res.text()).split("\n")
+    .find((l) => l.startsWith("#EXT-X-MEDIA:TYPE=AUDIO") && l.includes("DEFAULT=YES"));
+  const uri = line?.match(/URI="([^"]+)"/)?.[1];
+  if (!uri) throw new Error("Piste audio introuvable");
+  return new URL(uri, master).href;
+}
+
+let hls, loadId = 0, attachId = 0, current = null;
+let audioOnly = false;
+try { audioOnly = localStorage.getItem("audioOnly") === "1"; } catch {}
 const dialog = document.getElementById("player");
 const video = document.getElementById("video");
+const audioBtn = document.getElementById("paudio");
 
 async function play(ep) {
   const id = ++loadId;
   const fail = (err) => {
     if (id === loadId) document.getElementById("ptitle").textContent = ep.title + " — " + err.message;
   };
-  document.getElementById("ptitle").textContent = ep.show.name + " — " + ep.title;
+  const title = ep.show.name + " — " + ep.title;
+  current = null;
+  document.getElementById("ptitle").textContent = title;
   document.getElementById("plink").href = SITE + ep.url;
   dialog.showModal();
   try {
-    const src = await getStreamUrl(await getMediaId(ep.url));
-    // The player was closed, or another episode opened, while this one loaded.
-    if (id !== loadId || !dialog.open) return;
-    if (video.canPlayType("application/vnd.apple.mpegurl")) {
-      video.onerror = () => fail(new Error("Lecture impossible"));
-      video.src = src;
-    } else if (window.Hls?.isSupported()) {
-      hls = new Hls();
-      hls.on(Hls.Events.ERROR, (_, data) => { if (data.fatal) fail(new Error("Lecture impossible : " + data.details)); });
-      hls.loadSource(src);
-      hls.attachMedia(video);
-    } else {
-      throw new Error("Lecture HLS non prise en charge");
-    }
+    const master = await getStreamUrl(await getMediaId(ep.url));
+    if (id !== loadId) return;
+    current = { id, master, fail, title };
+    await attach(0);
   } catch (err) {
     fail(err);
   }
 }
 
-function stop() {
+// Loads the current episode, as video or audio only, starting at `startAt` seconds.
+async function attach(startAt) {
+  const { id, master, fail, title } = current;
+  const attaching = ++attachId;
+  const src = audioOnly ? await getAudioUrl(master) : master;
+  // The player was closed, another episode opened, or the mode switched again meanwhile.
+  if (id !== loadId || attaching !== attachId || !dialog.open) return;
+  detach();
+  document.getElementById("ptitle").textContent = title; // Clears an error from the other mode.
+  dialog.classList.toggle("audio-only", audioOnly);
+  if (startAt) video.addEventListener("loadedmetadata", () => { video.currentTime = startAt; }, { once: true });
+  // hls.js first: Chrome's built-in HLS playback fails intermittently on these streams.
+  if (window.Hls?.isSupported()) {
+    hls = new Hls();
+    hls.on(Hls.Events.ERROR, (_, data) => { if (data.fatal) fail(new Error("Lecture impossible : " + data.details)); });
+    hls.loadSource(src);
+    hls.attachMedia(video);
+  } else if (video.canPlayType("application/vnd.apple.mpegurl")) {
+    video.onerror = () => fail(new Error("Lecture impossible"));
+    video.src = src;
+  } else {
+    throw new Error("Lecture HLS non prise en charge");
+  }
+}
+
+function detach() {
   if (hls) { hls.destroy(); hls = null; }
+  video.onerror = null;
   video.removeAttribute("src");
   video.load();
 }
-dialog.addEventListener("close", stop);
+
+audioBtn.setAttribute("aria-pressed", audioOnly);
+audioBtn.onclick = () => {
+  audioOnly = !audioOnly;
+  audioBtn.setAttribute("aria-pressed", audioOnly);
+  try { localStorage.setItem("audioOnly", audioOnly ? "1" : "0"); } catch {}
+  // Switch the episode that is playing, keeping its position.
+  if (current?.id === loadId && dialog.open) attach(video.currentTime).catch(current.fail);
+};
+
+dialog.addEventListener("close", () => { current = null; detach(); });
 document.getElementById("pclose").onclick = () => dialog.close();
 
 document.getElementById("range").onclick = (e) => {

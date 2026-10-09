@@ -40,3 +40,6 @@ dialog video { width: 100%; display: block; }
 dialog .bar { display: flex; justify-content: space-between; align-items: center; padding: 8px 12px;
               background: #202124; color: #fff; font-size: 14px; }
 dialog a, dialog button { color: #8ab4f8; background: none; border: 0; font: inherit; cursor: pointer; }
+#paudio { border: 1px solid #5f6368; border-radius: 4px; padding: 2px 8px; }
+#paudio[aria-pressed="true"] { background: #8ab4f8; color: #202124; border-color: #8ab4f8; }
+dialog.audio-only video { height: 80px; }
