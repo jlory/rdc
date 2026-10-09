@@ -11,6 +11,7 @@ const SHOWS = [
 ];
 const FIRST_HOUR = 6, LAST_HOUR = 23;
 const TZ = "America/Toronto"; // Montréal
+const LIVE = { name: "ICI Télé en direct", id: "cbft", url: "/tele/horaire" }; // CBFT: ICI Télé Montréal
 
 async function getPage(path) {
   const res = await fetch(SITE + path);
@@ -50,9 +51,11 @@ function withoutBitrateCap(url) {
   return url.slice(0, q) + (params.length ? "?" + params.join("&") : "");
 }
 
-// The validation API has no CORS headers, but supports JSONP.
+// The validation API has no CORS headers, but supports JSONP. Live channels use
+// the `medianetlive` app code, with the channel's call sign as media id; their
+// URLs expire after a couple of minutes.
 let jsonpCount = 0;
-function getStreamUrl(mediaId) {
+function getStreamUrl(mediaId, appCode = "medianet") {
   return new Promise((resolve, reject) => {
     const cb = "rc_" + ++jsonpCount;
     const s = document.createElement("script");
@@ -61,7 +64,7 @@ function getStreamUrl(mediaId) {
     window[cb] = (data) => { cleanup();
       data.url ? resolve(withoutBitrateCap(data.url)) : reject(new Error(data.message || "Pas de flux")); };
     s.onerror = () => { cleanup(); reject(new Error("Erreur réseau")); };
-    s.src = "https://services.radio-canada.ca/media/validation/v2/?appCode=medianet&idMedia=" + mediaId +
+    s.src = "https://services.radio-canada.ca/media/validation/v2/?appCode=" + appCode + "&idMedia=" + mediaId +
             "&output=jsonp&callback=" + cb + "&tech=hls&deviceType=ipad&connectionType=hd&multibitrate=true";
     document.head.appendChild(s);
   });
@@ -119,14 +122,22 @@ function render() {
   document.querySelector(".body").scrollTop = (11 - FIRST_HOUR) * hourPx;
 }
 
-// The master manifest lists the audio as a separate track; playing that track's
-// own playlist downloads no video at all.
+// Episodes list the audio as a separate track in the master manifest; playing
+// that track's own playlist downloads no video at all. The live stream has its
+// audio inside each video rendition, so the smallest one is used instead.
 async function getAudioUrl(master) {
   const res = await fetch(master);
   if (!res.ok) throw new Error(`HTTP ${res.status} : manifeste`);
-  const line = (await res.text()).split("\n")
-    .find((l) => l.startsWith("#EXT-X-MEDIA:TYPE=AUDIO") && l.includes("DEFAULT=YES"));
-  const uri = line?.match(/URI="([^"]+)"/)?.[1];
+  const lines = (await res.text()).split("\n").map((l) => l.trim());
+  const audio = lines.find((l) => l.startsWith("#EXT-X-MEDIA:TYPE=AUDIO") && l.includes("DEFAULT=YES"));
+  let uri = audio?.match(/URI="([^"]+)"/)?.[1];
+  if (!uri) {
+    let min = Infinity;
+    lines.forEach((l, i) => {
+      const bandwidth = +l.match(/^#EXT-X-STREAM-INF:.*\bBANDWIDTH=(\d+)/)?.[1];
+      if (bandwidth < min && lines[i + 1] && !lines[i + 1].startsWith("#")) { min = bandwidth; uri = lines[i + 1]; }
+    });
+  }
   if (!uri) throw new Error("Piste audio introuvable");
   return new URL(uri, master).href;
 }
@@ -139,18 +150,26 @@ const video = document.getElementById("video");
 const audioBtn = document.getElementById("paudio");
 
 // Opens the player on a video / audio choice; nothing plays until one is picked,
-// but the stream is looked up meanwhile so playback starts right away.
+// but an episode's stream is looked up meanwhile so playback starts right away.
 function play(ep) {
+  const master = getMediaId(ep.url).then((mediaId) => getStreamUrl(mediaId));
+  openPlayer({ title: ep.show.name + " — " + ep.title, url: ep.url, getMaster: () => master });
+  master.catch(current.fail);
+}
+
+// The live stream URL expires quickly, so it is looked up each time it's loaded.
+function playLive() {
+  openPlayer({ title: LIVE.name, url: LIVE.url, live: true, getMaster: () => getStreamUrl(LIVE.id, "medianetlive") });
+}
+
+function openPlayer({ title, url, live, getMaster }) {
   const id = ++loadId;
   const fail = (err) => {
-    if (id === loadId) document.getElementById("ptitle").textContent = ep.title + " — " + err.message;
+    if (id === loadId) document.getElementById("ptitle").textContent = title + " — " + err.message;
   };
-  const title = ep.show.name + " — " + ep.title;
-  const master = getMediaId(ep.url).then(getStreamUrl);
-  master.catch(fail);
-  current = { id, master, fail, title };
+  current = { id, getMaster, fail, title, live };
   document.getElementById("ptitle").textContent = title;
-  document.getElementById("plink").href = SITE + ep.url;
+  document.getElementById("plink").href = SITE + url;
   dialog.classList.add("choosing");
   dialog.classList.remove("audio-only");
   dialog.showModal();
@@ -166,9 +185,9 @@ function start(audio) {
 
 // Loads the current episode, as video or audio only, starting at `startAt` seconds.
 async function attach(startAt) {
-  const { id, master, fail, title } = current;
+  const { id, getMaster, fail, title } = current;
   const attaching = ++attachId;
-  const url = await master;
+  const url = await getMaster();
   const src = audioOnly ? await getAudioUrl(url) : url;
   // The player was closed, another episode opened, or the mode switched again meanwhile.
   if (id !== loadId || attaching !== attachId || !dialog.open) return;
@@ -211,10 +230,12 @@ document.getElementById("pchoose-audio").onclick = () => start(true);
 audioBtn.onclick = () => {
   setAudioOnly(!audioOnly);
   // Switch the episode that is playing, keeping its position.
-  if (current?.id === loadId && dialog.open) attach(video.currentTime).catch(current.fail);
+  // Live restarts at the live edge.
+  if (current?.id === loadId && dialog.open) attach(current.live ? 0 : video.currentTime).catch(current.fail);
 };
 
 dialog.addEventListener("close", () => { current = null; detach(); });
+document.getElementById("live").onclick = playLive;
 document.getElementById("pclose").onclick = () => dialog.close();
 
 document.getElementById("range").onclick = (e) => {
