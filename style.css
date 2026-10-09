@@ -43,3 +43,8 @@ dialog a, dialog button { color: #8ab4f8; background: none; border: 0; font: inh
 #paudio { border: 1px solid #5f6368; border-radius: 4px; padding: 2px 8px; }
 #paudio[aria-pressed="true"] { background: #8ab4f8; color: #202124; border-color: #8ab4f8; }
 dialog.audio-only video { height: 80px; }
+.choose { display: none; justify-content: center; gap: 16px; padding: 48px 16px; flex-wrap: wrap; }
+dialog.choosing .choose { display: flex; }
+dialog.choosing video, dialog.choosing #paudio { display: none; }
+dialog .choose button { color: #fff; font-size: 16px; padding: 12px 24px; border: 1px solid #5f6368; border-radius: 8px; }
+dialog .choose button.default { background: #8ab4f8; color: #202124; border-color: #8ab4f8; }

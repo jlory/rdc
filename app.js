@@ -138,31 +138,38 @@ const dialog = document.getElementById("player");
 const video = document.getElementById("video");
 const audioBtn = document.getElementById("paudio");
 
-async function play(ep) {
+// Opens the player on a video / audio choice; nothing plays until one is picked,
+// but the stream is looked up meanwhile so playback starts right away.
+function play(ep) {
   const id = ++loadId;
   const fail = (err) => {
     if (id === loadId) document.getElementById("ptitle").textContent = ep.title + " — " + err.message;
   };
   const title = ep.show.name + " — " + ep.title;
-  current = null;
+  const master = getMediaId(ep.url).then(getStreamUrl);
+  master.catch(fail);
+  current = { id, master, fail, title };
   document.getElementById("ptitle").textContent = title;
   document.getElementById("plink").href = SITE + ep.url;
+  dialog.classList.add("choosing");
+  dialog.classList.remove("audio-only");
   dialog.showModal();
-  try {
-    const master = await getStreamUrl(await getMediaId(ep.url));
-    if (id !== loadId) return;
-    current = { id, master, fail, title };
-    await attach(0);
-  } catch (err) {
-    fail(err);
-  }
+  document.getElementById(audioOnly ? "pchoose-audio" : "pchoose-video").focus();
+}
+
+function start(audio) {
+  setAudioOnly(audio);
+  dialog.classList.remove("choosing");
+  video.focus(); // The chosen button is now hidden; keep keyboard control (space to pause).
+  attach(0).catch(current.fail);
 }
 
 // Loads the current episode, as video or audio only, starting at `startAt` seconds.
 async function attach(startAt) {
   const { id, master, fail, title } = current;
   const attaching = ++attachId;
-  const src = audioOnly ? await getAudioUrl(master) : master;
+  const url = await master;
+  const src = audioOnly ? await getAudioUrl(url) : url;
   // The player was closed, another episode opened, or the mode switched again meanwhile.
   if (id !== loadId || attaching !== attachId || !dialog.open) return;
   detach();
@@ -190,11 +197,19 @@ function detach() {
   video.load();
 }
 
-audioBtn.setAttribute("aria-pressed", audioOnly);
-audioBtn.onclick = () => {
-  audioOnly = !audioOnly;
+function setAudioOnly(value) {
+  audioOnly = value;
   audioBtn.setAttribute("aria-pressed", audioOnly);
+  for (const [btnId, audio] of [["pchoose-video", false], ["pchoose-audio", true]]) {
+    document.getElementById(btnId).classList.toggle("default", audio === audioOnly);
+  }
   try { localStorage.setItem("audioOnly", audioOnly ? "1" : "0"); } catch {}
+}
+setAudioOnly(audioOnly);
+document.getElementById("pchoose-video").onclick = () => start(false);
+document.getElementById("pchoose-audio").onclick = () => start(true);
+audioBtn.onclick = () => {
+  setAudioOnly(!audioOnly);
   // Switch the episode that is playing, keeping its position.
   if (current?.id === loadId && dialog.open) attach(video.currentTime).catch(current.fail);
 };
