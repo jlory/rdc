@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Le Téléjournal</title>
+<script src="https://cdn.jsdelivr.net/npm/hls.js@1"></script>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <h1>Le Téléjournal</h1>
+  <span id="status">Chargement…</span>
+</header>
+
+<div class="cal" id="head"></div>
+<div class="body"><div class="cal" id="grid"></div></div>
+
+<dialog id="player">
+  <div class="bar"><span id="ptitle"></span>
+    <span><a id="plink" target="_blank" rel="noopener">Voir sur Radio-Canada</a> &nbsp; <button id="pclose">Fermer ✕</button></span>
+  </div>
+  <video id="video" controls autoplay playsinline></video>
+</dialog>
+
+<script src="app.js"></script>
+</body>
+</html>
