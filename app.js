@@ -1,10 +1,15 @@
 const SITE = "https://ici.radio-canada.ca";
-// `hour` is when the show airs; the time in the episode data is not reliable.
+// `hour` is when the show airs, given the weekday (0 = Sunday); the time in the
+// episode data is not reliable.
 const SHOWS = [
-  { name: "Téléjournal midi", path: "/tele/le-telejournal-midi/site/episodes", hour: 12, color: "#0277bd" },
-  { name: "Téléjournal 18 h", path: "/tele/le-telejournal-18h/site/episodes", hour: 18, color: "#d50000" },
+  { name: "Téléjournal midi", path: "/tele/le-telejournal-midi/site/episodes", hour: () => 12, color: "#0277bd" },
+  { name: "Téléjournal 18 h", path: "/tele/le-telejournal-18h/site/episodes", hour: () => 18, color: "#d50000" },
+  { name: "Téléjournal 22 h", path: "/tele/le-telejournal-avec-azeb-wolde-giorghis/site/episodes", hour: () => 22,
+    color: "#8e24aa" },
+  { name: "Téléjournal week-end", path: "/tele/le-telejournal-week-end/site/episodes",
+    hour: (weekday) => (weekday === 5 ? 22 : 18), color: "#0b8043" },
 ];
-const FIRST_HOUR = 6, LAST_HOUR = 22;
+const FIRST_HOUR = 6, LAST_HOUR = 23;
 const TZ = "America/Toronto"; // Montréal
 
 async function getPage(path) {
@@ -27,7 +32,7 @@ async function getEpisodes(show) {
   // Episodes whose video isn't available are listed too, with `duration: null`.
   return state.pages.pages[show.path].data.lineup.items
     .filter((ep) => ep.isMediaPlayable && ep.duration)
-    .map((ep) => ({ ...ep, show }));
+    .map((ep) => ({ ...ep, show, hour: show.hour(new Date(ep.date.slice(0, 10)).getUTCDay()) }));
 }
 
 async function getMediaId(episodeUrl) {
@@ -101,10 +106,10 @@ function render() {
       const minutes = Math.round(ep.duration.seconds / 60);
       const btn = document.createElement("button");
       btn.className = "event";
-      btn.style.top = (ep.show.hour - FIRST_HOUR) * hourPx + "px";
+      btn.style.top = (ep.hour - FIRST_HOUR) * hourPx + "px";
       btn.style.height = Math.max(minutes / 60 * hourPx, 22) + "px";
       btn.style.background = ep.show.color;
-      btn.innerHTML = `${ep.show.name} <small>${ep.show.hour} h · ${minutes} min</small>`;
+      btn.innerHTML = `${ep.show.name} <small>${ep.hour} h · ${minutes} min</small>`;
       btn.onclick = () => play(ep);
       col.appendChild(btn);
       // Too short for the details on their own line: put everything on one.
