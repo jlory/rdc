@@ -63,19 +63,23 @@ function getStreamUrl(mediaId) {
 }
 
 // Episode dates look like "2026-09-23T12:00:00.000Z" but are Montréal time,
-// so only the calendar date is used, and the week shown is Montréal's.
-function lastSevenDays() {
+// so only the calendar date is used, and the days shown are Montréal's.
+function lastDays(count) {
   const now = Object.fromEntries(
     new Intl.DateTimeFormat("en", { timeZone: TZ, year: "numeric", month: "numeric", day: "numeric" })
       .formatToParts(new Date()).map((p) => [p.type, +p.value]));
   // Midnight UTC of each day, so reading them in UTC gives Montréal's dates.
-  return [...Array(7)].map((_, i) => new Date(Date.UTC(now.year, now.month - 1, now.day - 6 + i)));
+  return [...Array(count)].map((_, i) => new Date(Date.UTC(now.year, now.month - 1, now.day - count + 1 + i)));
 }
 const ymd = (d) => d.toISOString().slice(0, 10);
 
-function render(episodes) {
-  const days = lastSevenDays();
-  const today = ymd(days[6]);
+let episodes = [], dayCount = 1;
+
+function render() {
+  const days = lastDays(dayCount);
+  const today = ymd(days[days.length - 1]);
+  document.querySelector(".body").style.setProperty("--days", dayCount);
+  for (const b of document.querySelectorAll("#range button")) b.setAttribute("aria-pressed", +b.dataset.days === dayCount);
 
   const head = document.getElementById("head");
   head.innerHTML = '<div class="head"></div>' + days.map((d) => `
@@ -150,10 +154,17 @@ function stop() {
 dialog.addEventListener("close", stop);
 document.getElementById("pclose").onclick = () => dialog.close();
 
+document.getElementById("range").onclick = (e) => {
+  const count = +e.target.dataset.days;
+  if (count) { dayCount = count; render(); }
+};
+render();
+
 // One show failing to load shouldn't hide the others.
 Promise.allSettled(SHOWS.map(getEpisodes)).then((results) => {
   results.forEach((r, i) => { if (r.status === "rejected") console.error(SHOWS[i].name, r.reason); });
-  render(results.flatMap((r) => r.value || []));
+  episodes = results.flatMap((r) => r.value || []);
+  render();
   const failed = SHOWS.filter((_, i) => results[i].status === "rejected").map((s) => s.name);
   document.getElementById("status").textContent = failed.length ? "Erreur : " + failed.join(", ") : "";
 }).catch((err) => {
