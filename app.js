@@ -3,13 +3,13 @@ const SITE = "https://ici.radio-canada.ca";
 // start with `episodes`. `hour` is when the show airs, given the weekday
 // (0 = Sunday); the time in the episode data is when it was published.
 const SHOWS = [
-  { name: "Téléjournal midi", page: "/emission/le-telejournal-midi-montreal",
+  { name: "Téléjournal midi", label: "Midi", page: "/emission/le-telejournal-midi-montreal",
     episodes: "/tele/le-telejournal-midi/site/episodes/", hour: () => 12, color: "#0277bd" },
-  { name: "Téléjournal 18 h", page: "/emission/le-telejournal-avec-patrice-roy",
+  { name: "Téléjournal 18 h", label: "18 h", page: "/emission/le-telejournal-avec-patrice-roy",
     episodes: "/tele/le-telejournal-18h/site/episodes/", hour: () => 18, color: "#d50000" },
-  { name: "Téléjournal 22 h", page: "/emission/le-telejournal-avec-azeb-wolde-giorghis",
+  { name: "Téléjournal 22 h", label: "22 h", page: "/emission/le-telejournal-avec-azeb-wolde-giorghis",
     episodes: "/tele/le-telejournal-avec-azeb-wolde-giorghis/site/episodes/", hour: () => 22, color: "#8e24aa" },
-  { name: "Téléjournal week-end", page: "/emission/le-telejournal-avec-claudine-bourbonnais",
+  { name: "Téléjournal week-end", label: "Week-end", page: "/emission/le-telejournal-avec-claudine-bourbonnais",
     episodes: "/tele/le-telejournal-week-end/site/episodes/", hour: (weekday) => (weekday === 5 ? 22 : 18),
     color: "#0b8043" },
 ];
@@ -148,6 +148,12 @@ function render() {
       if (btn.scrollHeight > btn.clientHeight) btn.classList.add("short");
     }
   }
+}
+
+// Not part of render(): shows are rendered as they load, and that shouldn't
+// move the calendar while it's being looked at.
+function scrollToMorning() {
+  const hourPx = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--hour"));
   document.querySelector(".body").scrollTop = (11 - FIRST_HOUR) * hourPx;
 }
 
@@ -194,13 +200,15 @@ function playLive() {
 function openPlayer({ title, url, live, getMaster }) {
   const id = ++loadId;
   const fail = (err) => {
-    if (id === loadId) document.getElementById("ptitle").textContent = title + " — " + err.message;
+    if (id !== loadId) return;
+    document.getElementById("ptitle").textContent = title + " — " + err.message;
+    dialog.classList.remove("loading");
   };
   current = { id, getMaster, fail, title, live };
   document.getElementById("ptitle").textContent = title;
   document.getElementById("plink").href = SITE + url;
   dialog.classList.add("choosing");
-  dialog.classList.remove("audio-only");
+  dialog.classList.remove("audio-only", "loading");
   dialog.showModal();
   document.getElementById(audioOnly ? "pchoose-audio" : "pchoose-video").focus();
 }
@@ -216,6 +224,7 @@ function start(audio) {
 async function attach(startAt) {
   const { id, getMaster, fail, title } = current;
   const attaching = ++attachId;
+  dialog.classList.add("loading");
   const url = await getMaster();
   const src = audioOnly ? await getAudioUrl(url) : url;
   // The player was closed, another episode opened, or the mode switched again meanwhile.
@@ -223,6 +232,7 @@ async function attach(startAt) {
   detach();
   document.getElementById("ptitle").textContent = title; // Clears an error from the other mode.
   dialog.classList.toggle("audio-only", audioOnly);
+  dialog.classList.add("loading"); // Unloading the previous stream may have fired `pause`.
   if (startAt) video.addEventListener("loadedmetadata", () => { video.currentTime = startAt; }, { once: true });
   // hls.js first: Chrome's built-in HLS playback fails intermittently on these streams.
   if (window.Hls?.isSupported()) {
@@ -263,25 +273,42 @@ audioBtn.onclick = () => {
   if (current?.id === loadId && dialog.open) attach(current.live ? 0 : video.currentTime).catch(current.fail);
 };
 
-dialog.addEventListener("close", () => { current = null; detach(); });
+// The spinner shows from the stream lookup until playback starts, and while
+// buffering. `canplay` also covers autoplay being blocked.
+video.addEventListener("waiting", () => dialog.classList.add("loading"));
+for (const type of ["canplay", "playing", "pause"]) {
+  video.addEventListener(type, () => dialog.classList.remove("loading"));
+}
+
+dialog.addEventListener("close", () => { current = null; detach(); dialog.classList.remove("loading"); });
 document.getElementById("live").onclick = playLive;
 document.getElementById("pclose").onclick = () => dialog.close();
 
 document.getElementById("range").onclick = (e) => {
   const count = +e.target.dataset.days;
-  if (count) { dayCount = count; render(); }
+  if (count) { dayCount = count; render(); scrollToMorning(); }
 };
 render();
+scrollToMorning();
 
-// One show failing to load shouldn't hide the others.
+// Each show is rendered as soon as it's loaded; one failing shouldn't hide the
+// others. Its chip in the header spins meanwhile, and then says how it went.
 const since = ymd(lastDays(MAX_DAYS)[0]);
-Promise.allSettled(SHOWS.map((show) => getEpisodes(show, since))).then((results) => {
-  results.forEach((r, i) => { if (r.status === "rejected") console.error(SHOWS[i].name, r.reason); });
-  episodes = results.flatMap((r) => r.value || []);
-  render();
-  const failed = SHOWS.filter((_, i) => results[i].status === "rejected").map((s) => s.name);
-  document.getElementById("status").textContent = failed.length ? "Erreur : " + failed.join(", ") : "";
-}).catch((err) => {
-  console.error(err);
-  document.getElementById("status").textContent = "Erreur : " + err.message;
-});
+for (const show of SHOWS) {
+  const chip = document.createElement("span");
+  chip.className = "chip loading";
+  chip.style.setProperty("--color", show.color);
+  chip.title = show.name + " : chargement…";
+  chip.append(document.createElement("i"), show.label);
+  document.getElementById("legend").appendChild(chip);
+  getEpisodes(show, since).then((eps) => {
+    episodes.push(...eps);
+    chip.className = "chip";
+    chip.title = `${show.name} : ${eps.length} épisode${eps.length > 1 ? "s" : ""}`;
+    render();
+  }, (err) => {
+    console.error(show.name, err);
+    chip.className = "chip failed";
+    chip.title = show.name + " : erreur — " + err.message;
+  });
+}

@@ -11,7 +11,7 @@
 <body>
 <header>
   <h1>Le Téléjournal</h1>
-  <span id="status">Chargement…</span>
+  <div class="legend" id="legend"></div>
   <button id="live">● En direct</button>
   <div class="range" id="range">
     <button data-days="1">Aujourd’hui</button><button data-days="3">3 jours</button><button data-days="7">7 jours</button>
@@ -31,7 +31,10 @@
     <button id="pchoose-video">▶ Vidéo</button>
     <button id="pchoose-audio">🔊 Audio seulement</button>
   </div>
-  <video id="video" controls autoplay playsinline></video>
+  <div class="screen">
+    <video id="video" controls autoplay playsinline></video>
+    <div class="spinner" aria-hidden="true"></div>
+  </div>
 </dialog>
 
 <script src="app.js"></script>
