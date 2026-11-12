@@ -1,14 +1,19 @@
 const SITE = "https://ici.radio-canada.ca";
-// `hour` is when the show airs, given the weekday (0 = Sunday); the time in the
-// episode data is not reliable.
+// `page` lists the show's latest videos, its episodes among them; their URLs
+// start with `episodes`. `hour` is when the show airs, given the weekday
+// (0 = Sunday); the time in the episode data is when it was published.
 const SHOWS = [
-  { name: "Téléjournal midi", path: "/tele/le-telejournal-midi/site/episodes", hour: () => 12, color: "#0277bd" },
-  { name: "Téléjournal 18 h", path: "/tele/le-telejournal-18h/site/episodes", hour: () => 18, color: "#d50000" },
-  { name: "Téléjournal 22 h", path: "/tele/le-telejournal-avec-azeb-wolde-giorghis/site/episodes", hour: () => 22,
-    color: "#8e24aa" },
-  { name: "Téléjournal week-end", path: "/tele/le-telejournal-week-end/site/episodes",
-    hour: (weekday) => (weekday === 5 ? 22 : 18), color: "#0b8043" },
+  { name: "Téléjournal midi", page: "/emission/le-telejournal-midi-montreal",
+    episodes: "/tele/le-telejournal-midi/site/episodes/", hour: () => 12, color: "#0277bd" },
+  { name: "Téléjournal 18 h", page: "/emission/le-telejournal-avec-patrice-roy",
+    episodes: "/tele/le-telejournal-18h/site/episodes/", hour: () => 18, color: "#d50000" },
+  { name: "Téléjournal 22 h", page: "/emission/le-telejournal-avec-azeb-wolde-giorghis",
+    episodes: "/tele/le-telejournal-avec-azeb-wolde-giorghis/site/episodes/", hour: () => 22, color: "#8e24aa" },
+  { name: "Téléjournal week-end", page: "/emission/le-telejournal-avec-claudine-bourbonnais",
+    episodes: "/tele/le-telejournal-week-end/site/episodes/", hour: (weekday) => (weekday === 5 ? 22 : 18),
+    color: "#0b8043" },
 ];
+const MAX_DAYS = 7, MAX_PAGES = 5;
 const FIRST_HOUR = 6, LAST_HOUR = 23;
 const TZ = "America/Toronto"; // Montréal
 const LIVE = { name: "ICI Télé en direct", id: "cbft", url: "/tele/horaire" }; // CBFT: ICI Télé Montréal
@@ -28,18 +33,38 @@ function readState(html) {
   return JSON.parse(html.slice(eq, end).trim().replace(/;$/, ""));
 }
 
-async function getEpisodes(show) {
-  const state = readState(await getPage(show.path));
-  // Episodes whose video isn't available are listed too, with `duration: null`.
-  return state.pages.pages[show.path].data.lineup.items
-    .filter((ep) => ep.isMediaPlayable && ep.duration)
-    .map((ep) => ({ ...ep, show, hour: show.hour(new Date(ep.date.slice(0, 10)).getUTCDay()) }));
+// The state has the page's data under its path, after redirects.
+const pageBlocks = (state) => Object.values(state.pages.pages)[0].data.pageBlocks.items;
+
+// The show page's "Dernières publications" list is paginated, 20 videos per
+// page, newest first; pages are read until one goes back past `since`.
+async function getEpisodes(show, since) {
+  const cards = [];
+  for (let page = 1; page <= MAX_PAGES; page++) {
+    const blocks = pageBlocks(readState(await getPage(show.page + (page > 1 ? "?page=" + page : ""))));
+    const latest = blocks.find((b) => b.lineup?.template?.webId?.startsWith("INDEX"))?.lineup;
+    if (!latest) throw new Error("Dernières publications introuvables");
+    cards.push(...latest.items.map((item) => item.universalCard).filter(Boolean));
+    if (page >= latest.pagination.count || !cards.length || montrealDay(cards.at(-1).date) < since) break;
+  }
+  const recent = cards.filter((c) => c.url.startsWith(show.episodes) && montrealDay(c.date) >= since);
+  // The cards have no duration nor media id: those are on each episode's page.
+  const results = await Promise.allSettled(recent.map((c) => getVideo(c.url)));
+  return recent.flatMap((c, i) => {
+    if (results[i].status === "rejected") console.error(show.name, c.url, results[i].reason);
+    const video = results[i].value;
+    if (!video) return [];
+    const day = montrealDay(c.date);
+    return [{ title: c.title, url: c.url, day, ...video, show, hour: show.hour(new Date(day).getUTCDay()) }];
+  });
 }
 
-async function getMediaId(episodeUrl) {
-  const match = (await getPage(episodeUrl)).match(/"mediaId":"(\d+)"/);
-  if (!match) throw new Error("Vidéo introuvable");
-  return match[1];
+// Episodes whose video isn't available have no duration.
+async function getVideo(episodeUrl) {
+  const block = pageBlocks(readState(await getPage(episodeUrl))).find((b) => b.videoPlaylist);
+  const content = block?.videoPlaylist.video?.playableContent;
+  if (!content?.media?.id || !content.duration) return null;
+  return { mediaId: content.media.id, seconds: content.duration.inSeconds };
 }
 
 // The validation API caps the stream at 480p with `aws.manifestfilter`; without
@@ -70,16 +95,20 @@ function getStreamUrl(mediaId, appCode = "medianet") {
   });
 }
 
-// Episode dates look like "2026-09-23T12:00:00.000Z" but are Montréal time,
-// so only the calendar date is used, and the days shown are Montréal's.
-function lastDays(count) {
-  const now = Object.fromEntries(
+// Days are Montréal's, as midnight UTC of that date, so reading them in UTC
+// gives Montréal's dates.
+function montrealDate(date) {
+  const { year, month, day } = Object.fromEntries(
     new Intl.DateTimeFormat("en", { timeZone: TZ, year: "numeric", month: "numeric", day: "numeric" })
-      .formatToParts(new Date()).map((p) => [p.type, +p.value]));
-  // Midnight UTC of each day, so reading them in UTC gives Montréal's dates.
-  return [...Array(count)].map((_, i) => new Date(Date.UTC(now.year, now.month - 1, now.day - count + 1 + i)));
+      .formatToParts(date).map((p) => [p.type, +p.value]));
+  return new Date(Date.UTC(year, month - 1, day));
+}
+function lastDays(count) {
+  const today = montrealDate(new Date());
+  return [...Array(count)].map((_, i) => new Date(today.getTime() - (count - 1 - i) * 86400000));
 }
 const ymd = (d) => d.toISOString().slice(0, 10);
+const montrealDay = (iso) => ymd(montrealDate(new Date(iso)));
 
 let episodes = [], dayCount = 1;
 
@@ -105,8 +134,8 @@ function render() {
     const col = document.createElement("div");
     col.className = "day";
     grid.appendChild(col);
-    for (const ep of episodes.filter((e) => e.date.slice(0, 10) === ymd(d))) {
-      const minutes = Math.round(ep.duration.seconds / 60);
+    for (const ep of episodes.filter((e) => e.day === ymd(d))) {
+      const minutes = Math.round(ep.seconds / 60);
       const btn = document.createElement("button");
       btn.className = "event";
       btn.style.top = (ep.hour - FIRST_HOUR) * hourPx + "px";
@@ -152,7 +181,7 @@ const audioBtn = document.getElementById("paudio");
 // Opens the player on a video / audio choice; nothing plays until one is picked,
 // but an episode's stream is looked up meanwhile so playback starts right away.
 function play(ep) {
-  const master = getMediaId(ep.url).then((mediaId) => getStreamUrl(mediaId));
+  const master = getStreamUrl(ep.mediaId);
   openPlayer({ title: ep.show.name + " — " + ep.title, url: ep.url, getMaster: () => master });
   master.catch(current.fail);
 }
@@ -245,7 +274,8 @@ document.getElementById("range").onclick = (e) => {
 render();
 
 // One show failing to load shouldn't hide the others.
-Promise.allSettled(SHOWS.map(getEpisodes)).then((results) => {
+const since = ymd(lastDays(MAX_DAYS)[0]);
+Promise.allSettled(SHOWS.map((show) => getEpisodes(show, since))).then((results) => {
   results.forEach((r, i) => { if (r.status === "rejected") console.error(SHOWS[i].name, r.reason); });
   episodes = results.flatMap((r) => r.value || []);
   render();
